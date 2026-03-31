@@ -199,6 +199,11 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--gray6);color:var(--b
     <div id="tab-stats" class="section">
       <div class="section-label">카테고리별 달성률 (최근 30일)</div>
       <div class="cat-stats" id="cat-stats"></div>
+      <!-- 카테고리 클릭 시 종목별 상세 -->
+      <div id="cat-detail-panel" style="display:none;margin-top:4px;">
+        <div class="section-label" id="cat-detail-title" style="margin-bottom:10px;"></div>
+        <div id="cat-detail-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;"></div>
+      </div>
     </div>
 
     <div id="tab-settings" class="section">
@@ -211,9 +216,14 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--gray6);color:var(--b
       </div>
       <div class="setting-section-title">달력 표시</div>
       <div class="settings-list">
-        <div class="setting-item" style="flex-direction:column;align-items:flex-start;gap:10px;">
-          <div><div class="s-title">달력 날짜 스티커</div><div class="s-sub">완료한 날 달력에 표시할 스티커를 골라요</div></div>
-          <div id="cal-sticker-grid" style="display:grid;grid-template-columns:repeat(8,1fr);gap:4px;width:100%;"></div>
+        <div class="setting-item" style="flex-direction:column;align-items:flex-start;gap:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;width:100%;cursor:pointer;" onclick="toggleStickerGrid()">
+            <div><div class="s-title">달력 날짜 스티커</div><div class="s-sub">완료한 날 달력에 표시할 스티커를 골라요</div></div>
+            <span id="sticker-toggle-icon" style="font-size:18px;color:var(--gray3);transition:transform 0.25s;">›</span>
+          </div>
+          <div id="sticker-grid-wrap" style="overflow:hidden;max-height:0;transition:max-height 0.35s ease;width:100%;">
+            <div id="cal-sticker-grid" style="display:grid;grid-template-columns:repeat(8,1fr);gap:4px;width:100%;padding-top:12px;"></div>
+          </div>
         </div>
       </div>
       <div class="setting-section-title">데이터</div>
@@ -617,28 +627,72 @@ function moveMonth(dir){
 
 function renderStats(){
   const el=document.getElementById('cat-stats');
+  // 상세 패널 닫기
+  document.getElementById('cat-detail-panel').style.display='none';
   if(!todos.length){el.innerHTML='<div class="empty-state">할 일을 추가하면 통계가 보여요</div>';return;}
   const cats={};
   todos.forEach(t=>{
     const cat=t.cat||'미분류';
-    if(!cats[cat])cats[cat]={total:0,done:0};
+    if(!cats[cat])cats[cat]={total:0,done:0,items:{}};
     for(let i=0;i<30;i++){
       const d=new Date();d.setDate(d.getDate()-i);
       const dStr=ds(d.getFullYear(),d.getMonth()+1,d.getDate());
       const applies=t.days.includes(d.getDay())||t.specificDate===dStr;
-      if(applies){cats[cat].total++;if(checks[dStr+'_'+t.id])cats[cat].done++;}
+      if(applies){
+        cats[cat].total++;
+        if(!cats[cat].items[t.id])cats[cat].items[t.id]={title:t.title,sticker:t.sticker,total:0,done:0};
+        cats[cat].items[t.id].total++;
+        if(checks[dStr+'_'+t.id]){cats[cat].done++;cats[cat].items[t.id].done++;}
+      }
     }
   });
   const sorted=Object.entries(cats).filter(([,v])=>v.total>0).sort((a,b)=>Math.round(b[1].done/b[1].total*100)-Math.round(a[1].done/a[1].total*100));
   if(!sorted.length){el.innerHTML='<div class="empty-state">아직 기록이 없어요</div>';return;}
   el.innerHTML=sorted.map(([name,v])=>{
     const pct=Math.round(v.done/v.total*100);
-    return `<div class="cat-stat-item">
-      <div class="cat-stat-top"><span class="cat-stat-name">${name}</span><span class="cat-stat-pct">${pct}%</span></div>
+    return `<div class="cat-stat-item" onclick="showCatDetail('${name.replace(/'/g,"\\'")}',${JSON.stringify(v.items).replace(/"/g,'&quot;')})" style="cursor:pointer;user-select:none;">
+      <div class="cat-stat-top">
+        <span class="cat-stat-name">${name}</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="cat-stat-pct">${pct}%</span>
+          <span style="font-size:13px;color:var(--gray3);">›</span>
+        </div>
+      </div>
       <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%"></div></div>
       <div class="cat-stat-sub">최근 30일 · ${v.done}/${v.total}개 완료</div>
     </div>`;
   }).join('');
+}
+
+function showCatDetail(catName, itemsEncoded){
+  const items = typeof itemsEncoded === 'string' ? JSON.parse(itemsEncoded) : itemsEncoded;
+  const panel=document.getElementById('cat-detail-panel');
+  const title=document.getElementById('cat-detail-title');
+  const list=document.getElementById('cat-detail-list');
+  // 이미 열려있고 같은 카테고리면 닫기
+  if(panel.style.display!=='none' && title.dataset.cat===catName){
+    panel.style.display='none';
+    return;
+  }
+  title.textContent=`${catName} 종목별 상세`;
+  title.dataset.cat=catName;
+  const sorted=Object.values(items).filter(v=>v.total>0).sort((a,b)=>{
+    const pa=Math.round(b.done/b.total*100), pb=Math.round(a.done/a.total*100);
+    return pa-pb;
+  });
+  list.innerHTML=sorted.map(v=>{
+    const pct=Math.round(v.done/v.total*100);
+    return `<div class="cat-stat-item">
+      <div class="cat-stat-top">
+        <span style="font-size:13px;font-weight:500;color:var(--black);">${v.sticker?v.sticker+' ':''}${v.title}</span>
+        <span class="cat-stat-pct">${pct}%</span>
+      </div>
+      <div class="cat-bar"><div class="cat-bar-fill" style="width:${pct}%"></div></div>
+      <div class="cat-stat-sub">${v.done}/${v.total}일 완료</div>
+    </div>`;
+  }).join('');
+  panel.style.display='block';
+  setTimeout(()=>panel.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
 }
 
 function switchTab(t){
@@ -650,7 +704,21 @@ function switchTab(t){
   document.getElementById('add-fab').style.display=t==='settings'?'none':'flex';
   if(t==='calendar')renderCalendar();
   if(t==='stats')renderStats();
-  if(t==='settings'){updatePinStatus();renderCalStickerGrid();}
+  if(t==='settings'){updatePinStatus();}
+}
+
+function toggleStickerGrid(){
+  const wrap=document.getElementById('sticker-grid-wrap');
+  const icon=document.getElementById('sticker-toggle-icon');
+  const isOpen=wrap.style.maxHeight!=='0px'&&wrap.style.maxHeight!=='';
+  if(isOpen){
+    wrap.style.maxHeight='0px';
+    icon.style.transform='rotate(0deg)';
+  } else {
+    renderCalStickerGrid();
+    wrap.style.maxHeight='300px';
+    icon.style.transform='rotate(90deg)';
+  }
 }
 
 function renderCalStickerGrid(){
