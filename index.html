@@ -207,6 +207,22 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--gray6);color:var(--b
     </div>
 
     <div id="tab-settings" class="section">
+      <div class="setting-section-title">☁️ GitHub 동기화</div>
+      <div class="settings-list">
+        <div class="setting-item" style="flex-direction:column;align-items:flex-start;gap:10px;">
+          <div style="width:100%">
+            <div class="s-title">Personal Access Token</div>
+            <div class="s-sub">설정하면 데이터가 GitHub에 자동 저장돼요</div>
+          </div>
+          <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxx"
+            style="width:100%;border:1.5px solid var(--gray5);border-radius:12px;padding:10px 12px;font-size:13px;color:var(--black);font-family:'Noto Sans KR',sans-serif;background:var(--gray6);outline:none;">
+          <div style="display:flex;gap:8px;width:100%">
+            <button class="setting-btn" onclick="saveGhToken()" style="flex:1;">저장</button>
+            <button class="setting-btn" onclick="syncFromGitHub()" style="flex:1;">지금 불러오기</button>
+          </div>
+          <div id="syncStatus" style="font-size:12px;color:var(--gray3);width:100%;line-height:1.6;"></div>
+        </div>
+      </div>
       <div class="setting-section-title">보안</div>
       <div class="settings-list">
         <div class="setting-item">
@@ -375,9 +391,75 @@ let confirmCb=null;
 function todayStr(){const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;}
 function pad(n){return String(n).padStart(2,'0');}
 function ds(y,m,d){return `${y}-${pad(m)}-${pad(d)}`;}
-function saveTodos(){localStorage.setItem(KEYS.todos,JSON.stringify(todos));}
-function saveChecks(){localStorage.setItem(KEYS.checks,JSON.stringify(checks));}
+function saveTodos(){localStorage.setItem(KEYS.todos,JSON.stringify(todos));githubSave();}
+function saveChecks(){localStorage.setItem(KEYS.checks,JSON.stringify(checks));githubSave();}
 function savePin(p){pin=p;localStorage.setItem(KEYS.pin,p);updatePinStatus();}
+
+// ─── GITHUB 동기화 ──────────────────────────────────────────────
+const GH_OWNER = 'beenijua';
+const GH_REPO  = 'planner';
+const GH_FILE  = 'data/planner-data.json';
+const GH_API   = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`;
+
+function getGhToken(){return localStorage.getItem('gh_token_planner')||'';}
+
+function saveGhToken(){
+  const t=document.getElementById('ghToken').value.trim();
+  if(!t){showToast('토큰을 입력해주세요');return;}
+  localStorage.setItem('gh_token_planner',t);
+  document.getElementById('ghToken').value='';
+  document.getElementById('syncStatus').textContent='✅ 토큰 저장됐어요! 지금 불러오기를 눌러보세요.';
+  showToast('토큰 저장됐어요 ✅');
+}
+
+let _ghSaveTimer=null;
+async function githubSave(){
+  const token=getGhToken();if(!token)return;
+  clearTimeout(_ghSaveTimer);
+  _ghSaveTimer=setTimeout(async()=>{
+    try{
+      const data={todos,checks,exportedAt:new Date().toISOString()};
+      const content=btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+      let sha='';
+      try{const r=await fetch(GH_API,{headers:{Authorization:`token ${token}`}});if(r.ok){const j=await r.json();sha=j.sha;}}catch(e){}
+      const body={message:'sync: planner data',content};
+      if(sha)body.sha=sha;
+      const res=await fetch(GH_API,{method:'PUT',headers:{Authorization:`token ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(res.ok){
+        const now=new Date();
+        const el=document.getElementById('syncStatus');
+        if(el)el.textContent=`☁️ 마지막 저장: ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`;
+      }
+    }catch(e){}
+  },1000);
+}
+
+async function syncFromGitHub(){
+  const token=getGhToken();
+  if(!token){showToast('먼저 토큰을 저장해주세요');return;}
+  const el=document.getElementById('syncStatus');
+  if(el)el.textContent='⏳ 불러오는 중...';
+  try{
+    const res=await fetch(GH_API+'?t='+Date.now(),{headers:{Authorization:`token ${token}`}});
+    if(!res.ok){
+      if(res.status===404){if(el)el.textContent='☁️ 저장된 데이터 없음 (처음 사용)';}
+      else{if(el)el.textContent='❌ 불러오기 실패 (토큰 확인)';}
+      return;
+    }
+    const j=await res.json();
+    const data=JSON.parse(decodeURIComponent(escape(atob(j.content))));
+    if(data.todos){
+      todos=data.todos;checks=data.checks||{};
+      localStorage.setItem(KEYS.todos,JSON.stringify(todos));
+      localStorage.setItem(KEYS.checks,JSON.stringify(checks));
+      renderTodos();renderDateStrip();updateHeader();
+      if(el)el.textContent=`✅ 할 일 ${todos.length}개 불러왔어요!`;
+      showToast(`할 일 ${todos.length}개 불러왔어요 ✅`);
+    }
+  }catch(e){
+    if(el)el.textContent='❌ 오류: '+e.message;
+  }
+}
 function dateToObj(s){const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d);}
 function todosForDate(dateStr){
   const dow = dateToObj(dateStr).getDay();
@@ -406,9 +488,15 @@ function confirmAction(title,msg,isDanger,cb){
 function doConfirm(){closeConfirm();if(confirmCb)confirmCb();confirmCb=null;}
 function closeConfirm(){document.getElementById('confirm-overlay').classList.add('hidden');confirmCb=null;}
 
-function init(){
+async function init(){
   const now=new Date();calYear=now.getFullYear();calMonth=now.getMonth();
-  updateHeader();renderDateStrip();renderTodos();updatePinStatus();
+  updatePinStatus();
+  // 토큰 있으면 GitHub에서 자동 불러오기
+  if(getGhToken()){
+    await syncFromGitHub();
+  } else {
+    updateHeader();renderDateStrip();renderTodos();
+  }
 }
 
 function updateHeader(){
@@ -796,7 +884,15 @@ function switchTab(t){
   document.getElementById('add-fab').style.display=t==='settings'?'none':'flex';
   if(t==='calendar')renderCalendar();
   if(t==='stats')renderStats();
-  if(t==='settings'){updatePinStatus();}
+  if(t==='settings'){
+    updatePinStatus();
+    const el=document.getElementById('syncStatus');
+    if(el){
+      el.textContent=getGhToken()
+        ?'✅ 토큰 설정됨 · 자동 저장 활성화'
+        :'⚠️ 토큰 없음 · 데이터가 언제든 삭제될 수 있어요';
+    }
+  }
 }
 
 function toggleStickerGrid(){
