@@ -279,6 +279,18 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--gray6);color:var(--b
     <div class="form-group"><label>할 일</label><input type="text" id="f-title" placeholder="무엇을 할 건가요?"></div>
     <div class="form-group"><label>카테고리</label><input type="text" id="f-cat" placeholder="예) 운동, 공부, 집안일"></div>
     <div class="form-group"><label>메모</label><textarea id="f-note" rows="2" placeholder="추가 메모 (선택)"></textarea></div>
+
+    <!-- 기간 설정 -->
+    <div class="form-group">
+      <label>기간 설정 <span style="font-weight:400;color:var(--gray3)">(선택 — 트래커용)</span></label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="date" id="f-start" style="flex:1;padding:10px 12px;border:1.5px solid var(--gray5);border-radius:12px;font-size:13px;color:var(--black);font-family:'Noto Sans KR',sans-serif;background:var(--gray6);outline:none;">
+        <span style="font-size:13px;color:var(--gray3);">~</span>
+        <input type="date" id="f-end" style="flex:1;padding:10px 12px;border:1.5px solid var(--gray5);border-radius:12px;font-size:13px;color:var(--black);font-family:'Noto Sans KR',sans-serif;background:var(--gray6);outline:none;">
+      </div>
+      <div style="font-size:11px;color:var(--gray3);margin-top:5px;">설정하면 해당 기간에만 표시돼요</div>
+    </div>
+
     <div class="form-group">
       <label>반복 요일</label>
       <div class="day-checks" id="day-checks">
@@ -287,6 +299,7 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--gray6);color:var(--b
         <button class="day-check" data-d="4">목</button><button class="day-check" data-d="5">금</button>
         <button class="day-check" data-d="6">토</button>
       </div>
+      <div style="font-size:11px;color:var(--gray3);margin-top:5px;">선택 안 하면 기간 동안 매일 표시돼요</div>
     </div>
     <div class="form-group"><label>완료 스티커</label><div class="sticker-grid" id="sticker-grid"></div></div>
     <div class="modal-actions">
@@ -366,7 +379,19 @@ function saveTodos(){localStorage.setItem(KEYS.todos,JSON.stringify(todos));}
 function saveChecks(){localStorage.setItem(KEYS.checks,JSON.stringify(checks));}
 function savePin(p){pin=p;localStorage.setItem(KEYS.pin,p);updatePinStatus();}
 function dateToObj(s){const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d);}
-function todosForDate(dateStr){const dow=dateToObj(dateStr).getDay();return todos.filter(t=>t.days.includes(dow)||t.specificDate===dateStr);}
+function todosForDate(dateStr){
+  const dow = dateToObj(dateStr).getDay();
+  return todos.filter(t => {
+    // 기간 체크 (startDate/endDate 있으면)
+    if (t.startDate && dateStr < t.startDate) return false;
+    if (t.endDate && dateStr > t.endDate) return false;
+    // 반복 요일 or 특정 날짜 or 매일(기간만 설정)
+    if (t.days.length > 0) return t.days.includes(dow);
+    if (t.specificDate) return t.specificDate === dateStr;
+    if (t.startDate) return true; // 기간 내 매일
+    return false;
+  });
+}
 
 function confirmAction(title,msg,isDanger,cb){
   document.getElementById('confirm-title').textContent=title;
@@ -443,8 +468,57 @@ function renderTodos(){
 function renderTodoItem(t,dStr){
   const key=dStr+'_'+t.id;
   const isDone=!!checks[key];
-  const rep=t.days.length===7?'매일':t.days.length?t.days.map(d=>DAYS_KO[d]).join('·'):'오늘만';
   const sticker=isDone&&t.sticker?`<span class="todo-sticker">${t.sticker}</span>`:'';
+
+  // 반복 표시 레이블
+  let rep='';
+  if(t.startDate||t.endDate){
+    const s=t.startDate?t.startDate.slice(5).replace('-','/'):'';
+    const e=t.endDate?t.endDate.slice(5).replace('-','/'):'';
+    rep=`${s}${s&&e?'~':''}${e}`;
+  } else {
+    rep=t.days.length===7?'매일':t.days.length?t.days.map(d=>DAYS_KO[d]).join('·'):'오늘만';
+  }
+
+  // 트래커 배지 (기간 있을 때)
+  let trackerBadge='';
+  if(t.startDate&&t.endDate){
+    const today=todayStr();
+    const start=t.startDate, end=t.endDate;
+    const totalDays=Math.round((dateToObj(end)-dateToObj(start))/(1000*60*60*24))+1;
+    // 달성일 계산
+    let doneDays=0;
+    for(let i=0;i<totalDays;i++){
+      const d=new Date(dateToObj(start));d.setDate(d.getDate()+i);
+      const dStr2=ds(d.getFullYear(),d.getMonth()+1,d.getDate());
+      const applies=t.days.length>0?t.days.includes(d.getDay()):true;
+      if(applies&&checks[dStr2+'_'+t.id])doneDays++;
+    }
+    // D-day
+    let dday='';
+    if(today<start){
+      const diff=Math.round((dateToObj(start)-dateToObj(today))/(1000*60*60*24));
+      dday=`D-${diff}`;
+    } else if(today>end){
+      dday='완료';
+    } else {
+      const diff=Math.round((dateToObj(end)-dateToObj(today))/(1000*60*60*24));
+      dday=diff===0?'D-Day':`D-${diff}`;
+    }
+    // 진행률
+    const targetDays=t.days.length>0?Math.ceil(totalDays*t.days.length/7):totalDays;
+    const pct=targetDays?Math.round(doneDays/targetDays*100):0;
+    trackerBadge=`<div style="margin-top:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+        <span style="font-size:10px;color:var(--gray3);">${doneDays}일 달성 · ${pct}%</span>
+        <span style="font-size:10px;font-weight:700;color:${today<=end?'var(--black)':'var(--gray3)'};">${dday}</span>
+      </div>
+      <div style="height:3px;background:var(--gray5);border-radius:99px;overflow:hidden;">
+        <div style="height:100%;background:var(--black);border-radius:99px;width:${pct}%;transition:width .4s;"></div>
+      </div>
+    </div>`;
+  }
+
   return `<div class="todo-item${isDone?' done-item':''}">
     <button class="check-btn${isDone?' checked':''}" onclick="toggleCheck('${t.id}','${dStr}')">
       <svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3"/></svg>
@@ -456,6 +530,7 @@ function renderTodoItem(t,dStr){
         <span class="repeat-badge">${rep}</span>
       </div>
       ${t.note?`<div style="font-size:12px;color:var(--gray3);margin-top:3px;">${t.note}</div>`:''}
+      ${trackerBadge}
     </div>
     ${sticker}
     <div class="todo-actions">
@@ -490,6 +565,8 @@ function deleteTodo(id){
 function openAddModal(){
   editId=null;selSticker='⭐';selDays=[];
   ['f-title','f-cat','f-note'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('f-start').value='';
+  document.getElementById('f-end').value='';
   document.getElementById('modal-title').textContent='할 일 추가';
   renderDayChecks();renderStickerGrid();
   document.getElementById('modal-overlay').classList.remove('hidden');
@@ -502,6 +579,8 @@ function openEditModal(id){
   document.getElementById('f-title').value=t.title;
   document.getElementById('f-cat').value=t.cat||'';
   document.getElementById('f-note').value=t.note||'';
+  document.getElementById('f-start').value=t.startDate||'';
+  document.getElementById('f-end').value=t.endDate||'';
   document.getElementById('modal-title').textContent='할 일 수정';
   renderDayChecks();renderStickerGrid();
   document.getElementById('modal-overlay').classList.remove('hidden');
@@ -532,11 +611,24 @@ function selectSticker(s){selSticker=s;renderStickerGrid();}
 function saveTodo(){
   const title=document.getElementById('f-title').value.trim();
   if(!title){alert('할 일을 입력해주세요');return;}
+  const startDate=document.getElementById('f-start').value||null;
+  const endDate=document.getElementById('f-end').value||null;
+  if(startDate&&endDate&&startDate>endDate){alert('종료일이 시작일보다 빨라요');return;}
+  const base={
+    title,
+    cat:document.getElementById('f-cat').value.trim(),
+    note:document.getElementById('f-note').value.trim(),
+    days:[...selDays],
+    sticker:selSticker,
+    startDate,
+    endDate,
+    specificDate:(selDays.length===0&&!startDate)?selDate:null
+  };
   if(editId){
     const t=todos.find(x=>x.id===editId);
-    if(t){t.title=title;t.cat=document.getElementById('f-cat').value.trim();t.note=document.getElementById('f-note').value.trim();t.days=[...selDays];t.sticker=selSticker;}
+    if(t)Object.assign(t,base);
   }else{
-    todos.push({id:Date.now().toString(),title,cat:document.getElementById('f-cat').value.trim(),note:document.getElementById('f-note').value.trim(),days:[...selDays],sticker:selSticker,specificDate:selDays.length===0?selDate:null});
+    todos.push({id:Date.now().toString(),...base});
   }
   saveTodos();closeModal();renderTodos();renderDateStrip();updateHeader();
 }
